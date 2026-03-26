@@ -1,0 +1,167 @@
+{
+  "cv": {
+    "name": "Ramana Gangarao",
+    "location": "SFO, CA",
+    "email": "ramanagangarao04@gmail.com",
+    "phone": "+1 (754) 275-7752",
+    "social_networks": [
+      {
+        "network": "LinkedIn",
+        "username": "ramana-gangarao"
+      },
+      {
+        "network": "GitHub",
+        "username": "RamanaGR"
+      }
+    ],
+    "sections": {
+      "experience": [
+        {
+          "company": "Optum",
+          "position": "AI Engineer",
+          "date": {
+            "start_date": "2025-12",
+            "end_date": null
+          },
+          "location": "San Francisco, CA",
+          "summary": "",
+          "highlights": [
+            "Contributed to ContractAI, customer care log classification, and several other AI initiatives, building intelligent systems for document understanding, knowledge retrieval, and workflow automation.",
+            "Processed unstructured contract documents using Google Document AI to extract entities, clauses, and key business terms for downstream analysis and search.",
+            "Designed extraction and ingestion pipelines using both vector and graph storage patterns, leveraging Neo4j for relationship modeling and node level embeddings.",
+            "Built knowledge graphs and domain ontologies for contractual data to model entities, obligations, dependencies, and semantic relationships across documents.",
+            "Developed agentic retrieval workflows and intelligent agents to query and traverse the knowledge graph, improving contextual retrieval and reasoning over contract data.",
+            "Created an MCP server on top of the knowledge graph to expose graph aware tools and structured retrieval capabilities for agent driven workflows.",
+            "Built backend services with FastAPI and developed user facing interfaces with Lovable.dev to enable contract exploration, search, and AI assisted interactions.",
+            "Established evaluation workflows for retrievers and generation systems using DeepEval and related methods to measure retrieval quality, answer quality, and system reliability.",
+            "Tested agent workflows with a focus on memory management, including both short term and long term memory patterns, using Google ADK.",
+            "Implemented parallel agent execution, supervisor patterns, ReAct loops, and agentic AI workflows to support multi step reasoning and coordinated task execution.",
+            "Supported fine tuning efforts for BERT and RoBERTa based models on Vertex AI, partnering with data scientists to improve task specific model performance.",
+            "Contributed to MLOps workflows on Google Cloud by supporting training, deployment, evaluation, and lifecycle management for AI and machine learning systems."
+          ]
+        },
+        {
+          "company": "Innovapath INC - TalentScreen",
+          "position": "AI Engineer",
+          "date": {
+            "start_date": "2025-01",
+            "end_date": "2025-12"
+          },
+          "location": "Dublin, CA",
+          "summary": "",
+          "highlights": [
+            "Built an AI powered talent management platform using Retrieval Augmented Generation and multi agent orchestration to standardize hiring workflows, reduce bias, and decrease time to hire.",
+            "Designed and implemented multi agent workflows in LangGraph, with specialized agents for conversation management, retrieval, candidate matching, routing, and orchestration.",
+            "Developed MCP based tool calling infrastructure by creating custom MCP servers and reusable tools to support agent actions, external integrations, and workflow execution.",
+            "Built a document ingestion and preprocessing pipeline using Unstructured.io and Docling to clean source content, normalize formats, extract metadata, and prepare enterprise documents for downstream retrieval.",
+            "Implemented semantic chunking in Docling with overlap strategies to preserve context across chunks, and generated embeddings using Amazon Titan Text Embeddings for high quality retrieval.",
+            "Engineered a Milvus based vector search layer using collections, metadata filtering, keyword search, and hybrid retrieval; configured HNSW indexing for low latency approximate nearest neighbor search at scale.",
+            "Improved retrieval quality by implementing cross encoder reranking and post retrieval evaluation metrics, including F1 score at K and related ranking measures, to track relevance and system performance.",
+            "Built a query optimization pipeline with query rewriting and balancing techniques to improve retrieval precision and generation quality; integrated Presidio for PII detection and redaction.",
+            "Implemented semantic query caching with Redis vector storage to identify similar historical queries and reuse optimized retrieval paths, reducing latency and compute cost.",
+            "Applied advanced prompting strategies, including few shot prompting, dynamic prompting, and structured reasoning patterns, and used Promptfoo to test and compare prompt performance across tasks.",
+            "Used Amazon Bedrock with Claude Sonnet for text generation, and implemented prompt caching to improve response time and reduce inference costs.",
+            "Developed CI and CD based evaluation pipelines with DeepEval to validate faithfulness, context recall, answer relevance, retrieval quality, and regression safety across RAG and agent workflows before release.",
+            "Implemented guardrails for safety and compliance using AWS services and Hugging Face libraries to detect and control PII exposure, toxicity, and tone related issues.",
+            "Built proof of concept pipelines with Sentence Transformers and ChromaDB to benchmark retrieval strategies, embedding performance, and open source alternatives.",
+            "Developed backend APIs, API Gateway integrations, and a React frontend to deliver recruiter facing and candidate facing workflows through a scalable full stack application.",
+            "Integrated Langfuse for end to end observability, including prompt versioning, tool call tracing, retrieval context tracking, agent transition monitoring, and latency analysis."
+          ]
+        },
+        {
+          "company": "Wipro Limited",
+          "position": "Developer Analyst I / MLOps",
+          "date": {
+            "start_date": "2021-09",
+            "end_date": "2024-08"
+          },
+          "location": "Chennai, India",
+          "summary": "",
+          "highlights": [
+            "Designed and maintained offline and online feature pipelines, including schema validation, time-based aggregations, and consistency between training and serving data.",
+            "Implemented real-time feature updates using incremental writes and TTLs to keep features fresh and production-aligned.",
+            "Deployed and operated real-time model serving APIs on Amazon SageMaker, managing authentication, versioned endpoints, traffic routing, and rollback strategies.",
+            "Built scalable batch inference pipelines for large datasets with idempotent outputs and full input/output traceability.",
+            "Integrated A/B testing and shadow deployments to safely evaluate new models against live production traffic.",
+            "Used MLflow for experiment tracking, logging parameters and metrics, and managing model versions via the model registry.",
+            "Automated model packaging and deployment through CI/CD pipelines, promoting models across dev, staging, and production environments.",
+            "Implemented monitoring and alerting for model latency, error rates, and data drift to detect production issues early.",
+            "Supported automated retraining workflows, triggering pipelines based on performance degradation or data quality signals."
+          ]
+        },
+        {
+          "company": "INNOVAPATH IT Solutions PVT Ltd",
+          "position": "Software Engineer",
+          "date": {
+            "start_date": "2016-09",
+            "end_date": "2021-09"
+          },
+          "location": "Hyderabad, India",
+          "summary": "",
+          "highlights": [
+            "Built and deployed Spring Boot microservices using JPA/Hibernate, applying design patterns and Java 8 features for scalable backend development.",
+            "Developed automation frameworks using Selenium, TestNG, RESTAssured, and BDD, improving UI and API test coverage and maintainability.",
+            "Containerized Java and Python services with Docker and deployed on AWS EC2 and S3, ensuring high availability and production stability.",
+            "Implemented CI/CD pipelines using Jenkins and Git, automating builds, tests, and deployments for faster and reliable software delivery."
+          ]
+        }
+      ],
+      "skills": [
+        {
+          "label": "Programming Languages",
+          "details": "Python, JavaScript, Java, SQL, LookML"
+        },
+        {
+          "label": "AI & Agentic Libraries",
+          "details": "Google ADK, LangGraph, MilvusDB, Neo4j, RDS"
+        },
+        {
+          "label": "Cloud & DevOps (GCP & AWS)",
+          "details": "GCP (Cloud Run, GKE, Pub/Sub, Secret Manager), AWS (EKS, Lambda, S3, EC2), Docker"
+        }
+      ],
+      "education": [
+        {
+          "institution": "Atlantis University",
+          "area": "Information Technology",
+          "degree": "MS",
+          "date": {
+            "start_date": "2024-08",
+            "end_date": "2025-10"
+          },
+          "location": "Miami, FL, USA",
+          "summary": ""
+        },
+        {
+          "institution": "Keshav Memorial Institute of Technology - JNTUH",
+          "area": "Electronics and Instrumentation Engineering",
+          "degree": "Bachelor of Technology",
+          "date": {
+            "start_date": "2013-07",
+            "end_date": "2016-04"
+          },
+          "location": "Hyderabad, India",
+          "summary": ""
+        }
+      ],
+      "certifications": [
+        {
+          "name": "[AWS Certified Cloud Practitioner](https://www.credly.com/badges/f236c48e-71cb-4334-989c-c098170a5706)",
+          "issued": "Jul 2024",
+          "expires": "Jul 2027",
+          "credential_id": "6e0a1956348246ed841a8680c2f3c9b1",
+          "url": "https://www.credly.com/badges/f236c48e-71cb-4334-989c-c098170a5706/linked_in_profile",
+          "notes": "Credly badge"
+        }
+      ],
+      "design": {
+        "entries": [
+          {
+            "allow_page_break": true
+          }
+        ]
+      }
+    }
+  },
+  "sort_entries": null
+}
