@@ -1,0 +1,52 @@
+# SmartApply Configuration File (YAML)
+# This file contains all configurable options for the email automation tool.
+# Command-line arguments override these settings.
+
+# Gmail Configuration
+gmail:
+  use_api: true  # true = Gmail API (OAuth2), false = SMTP
+  smtp_host: smtp.gmail.com
+  smtp_port: 587
+  email_delay_seconds: 0.5
+  rate_limit_per_minute: 60
+
+# Ollama Configuration (Local LLM)
+ollama:
+  base_url: http://localhost:11434
+  model: llama3
+  timeout_seconds: 30
+  max_retries: 3
+  retry_backoff_multiplier: 2
+
+# Input File
+input:
+  csv_filename: sample_jobs.csv  # Filename in input/ directory (e.g., jobs.csv)
+  column_mapping:
+    email: "Contact Info"          # CSV column name for email
+    description: "Description"     # CSV column name for job description
+
+# Email Processing
+email_processing:
+  email_limit: null  # null = no limit, set to integer to limit (e.g., 10 for testing)
+  dry_run: false
+  test_mode: false
+  skip_llm: false
+  force_resend: false
+
+# Resume Configuration
+resume:
+  json_path: resume/Ramana_Gangarao_Resume.json
+  pdf_path: resume/Ramana_Gangarao_Resume.pdf
+
+# File Paths
+file_paths:
+  input_dir: input
+  output_dir: logs
+  sent_emails_db: data/sent_emails.json
+  app_log: logs/app.log
+  error_log: logs/error.log
+
+# Logging
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
