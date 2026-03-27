@@ -56,42 +56,67 @@ class PreflightValidator:
         errors = []
 
         resume_config = self.config.get("resume", {})
-        resume_json = resume_config.get("json_path", "resume/resume.json")
-        resume_pdf = resume_config.get("pdf_path", "resume/resume.pdf")
-
-        # Check JSON
-        json_path = Path(resume_json)
-        if not json_path.exists():
-            error = f"Resume JSON not found: {resume_json}"
-            logger.error(error)
-            errors.append(error)
-        elif not json_path.is_file():
-            error = f"Resume JSON is not a file: {resume_json}"
-            logger.error(error)
-            errors.append(error)
-        else:
-            logger.info(f"✓ Resume JSON found: {resume_json}")
-
-        # Check PDF
-        pdf_path = Path(resume_pdf)
-        if not pdf_path.exists():
-            error = f"Resume PDF not found: {resume_pdf}"
-            logger.error(error)
-            errors.append(error)
-        elif not pdf_path.is_file():
-            error = f"Resume PDF is not a file: {resume_pdf}"
-            logger.error(error)
-            errors.append(error)
-        else:
-            # Check if PDF is readable
-            try:
-                with open(pdf_path, "rb") as f:
-                    f.read(4)  # Read first 4 bytes
-                logger.info(f"✓ Resume PDF found and readable: {resume_pdf}")
-            except Exception as e:
-                error = f"Resume PDF is not readable: {e}"
+        resume_dir = Path("resume")
+        
+        # Auto-detect JSON file if not specified
+        resume_json = resume_config.get("json_path")
+        if not resume_json:
+            json_files = list(resume_dir.glob("*.json"))
+            if json_files:
+                resume_json = str(json_files[0])
+                logger.info(f"Auto-detected resume JSON: {resume_json}")
+            else:
+                error = "No resume JSON file found in resume/ directory"
                 logger.error(error)
                 errors.append(error)
+        
+        # Auto-detect PDF file if not specified
+        resume_pdf = resume_config.get("pdf_path")
+        if not resume_pdf:
+            pdf_files = list(resume_dir.glob("*.pdf"))
+            if pdf_files:
+                resume_pdf = str(pdf_files[0])
+                logger.info(f"Auto-detected resume PDF: {resume_pdf}")
+            else:
+                error = "No resume PDF file found in resume/ directory"
+                logger.error(error)
+                errors.append(error)
+        
+        # Validate found JSON file
+        if resume_json:
+            json_path = Path(resume_json)
+            if not json_path.exists():
+                error = f"Resume JSON not found: {resume_json}"
+                logger.error(error)
+                errors.append(error)
+            elif not json_path.is_file():
+                error = f"Resume JSON is not a file: {resume_json}"
+                logger.error(error)
+                errors.append(error)
+            else:
+                logger.info(f"✓ Resume JSON found: {resume_json}")
+
+        # Validate found PDF file
+        if resume_pdf:
+            pdf_path = Path(resume_pdf)
+            if not pdf_path.exists():
+                error = f"Resume PDF not found: {resume_pdf}"
+                logger.error(error)
+                errors.append(error)
+            elif not pdf_path.is_file():
+                error = f"Resume PDF is not a file: {resume_pdf}"
+                logger.error(error)
+                errors.append(error)
+            else:
+                # Check if PDF is readable
+                try:
+                    with open(pdf_path, "rb") as f:
+                        f.read(4)  # Read first 4 bytes
+                    logger.info(f"✓ Resume PDF found and readable: {resume_pdf}")
+                except Exception as e:
+                    error = f"Resume PDF is not readable: {e}"
+                    logger.error(error)
+                    errors.append(error)
 
         return errors
 
@@ -148,19 +173,19 @@ class PreflightValidator:
     def validate_ollama_connectivity(self) -> Tuple[bool, str]:
         """Check if Ollama is running and accessible."""
         try:
-            from src.llm_client import OllamaClient
+            from src.services import OllamaService
 
             ollama_config = self.config.get("ollama", {})
-            client = OllamaClient(
+            service = OllamaService(
                 base_url=ollama_config.get("base_url", "http://localhost:11434"),
                 model=ollama_config.get("model", "llama3")
             )
 
-            if client.is_available():
-                logger.info(f"✓ Ollama is available at {client.base_url} with model '{client.model}'")
+            if service.is_available():
+                logger.info(f"✓ Ollama is available at {service.base_url} with model '{service.model}'")
                 return True, "Ollama is available"
             else:
-                error = f"Ollama is not responding at {client.base_url}"
+                error = f"Ollama is not responding at {service.base_url}"
                 logger.error(error)
                 return False, error
 
@@ -171,19 +196,42 @@ class PreflightValidator:
 
     def validate_gmail_credentials(self) -> Tuple[bool, str]:
         """Check if Gmail credentials are valid."""
-        credentials_path = os.getenv("GMAIL_API_CREDENTIALS_PATH") or self.config.get("gmail", {}).get("credentials_path") or "credentials.json"
-        
+        # Auto-detect credentials JSON by extension
+        credentials_path = os.getenv("GMAIL_API_CREDENTIALS_PATH") or self.config.get("gmail", {}).get("credentials_path")
+        if not credentials_path:
+            json_files = list(Path(".").glob("*.json"))
+            if json_files:
+                credentials_path = str(json_files[0])
+                logger.info(f"Auto-detected credentials JSON: {credentials_path}")
+            else:
+                error = "No credentials JSON file found in project root"
+                logger.error(error)
+                return False, error
+
         if not Path(credentials_path).exists():
             error = f"Gmail API credentials not found: {credentials_path}"
             logger.error(error)
             return False, error
 
+        # Auto-detect resume PDF by extension
+        resume_pdf_path = self.config.get("resume", {}).get("pdf_path")
+        if not resume_pdf_path:
+            resume_dir = Path("resume")
+            pdf_files = list(resume_dir.glob("*.pdf")) if resume_dir.exists() else []
+            if pdf_files:
+                resume_pdf_path = str(pdf_files[0])
+                logger.info(f"Auto-detected resume PDF: {resume_pdf_path}")
+            else:
+                error = "No resume PDF file found in resume/ directory"
+                logger.error(error)
+                return False, error
+
         try:
-            from src.email_sender import GmailAPISender
+            from src.services import GmailAPISender
 
             sender = GmailAPISender(
                 credentials_path=credentials_path,
-                resume_pdf_path=self.config.get("resume", {}).get("pdf_path", "resume/resume.pdf"),
+                resume_pdf_path=resume_pdf_path,
                 test_mode=False
             )
 

@@ -1,5 +1,5 @@
 """
-Email Sender module for SmartApply.
+Email sending service for SmartApply.
 Handles sending emails via Gmail API (OAuth2) with resume attachment and rate limiting.
 """
 
@@ -48,9 +48,7 @@ class GmailAPISender:
         """Initialize Gmail API service."""
         try:
             from google.auth.transport.requests import Request
-            from google.oauth2.service_account import Credentials
             from google_auth_oauthlib.flow import InstalledAppFlow
-            from google.auth.transport.requests import Request
             import pickle
             
             SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
@@ -128,7 +126,7 @@ class GmailAPISender:
             result = self.service.users().messages().send(userId="me", body=message).execute()
             
             message_id = result.get("id", "unknown")
-            logger.info(f"Email sent successfully to {recipient_email}. Message ID: {message_id}")
+            logger.info(f"Email sent to {recipient_email}. Message ID: {message_id}")
             return True, message_id
 
         except Exception as e:
@@ -143,8 +141,19 @@ class GmailAPISender:
         msg["To"] = recipient_email
         msg["Subject"] = subject
 
-        # Add body
-        msg.attach(MIMEText(body, "plain"))
+        # Convert plain text body to simple HTML for natural text flow in Gmail
+        paragraphs = body.split("\n\n")
+        html_body = ""
+        for para in paragraphs:
+            # Preserve single line breaks within paragraphs
+            para_html = para.strip().replace("\n", "<br>")
+            if para_html:
+                html_body += f"<p style=\"margin:0 0 1em 0;\">{para_html}</p>\n"
+        
+        html_content = f"""<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">
+{html_body}</div>"""
+        
+        msg.attach(MIMEText(html_content, "html"))
 
         # Attach resume
         if self.resume_pdf_path.exists():
@@ -169,11 +178,8 @@ class GmailAPISender:
             if not self.service:
                 return False, "Gmail API service not initialized"
             
-            # Try to get user profile
-            profile = self.service.users().getProfile(userId="me").execute()
-            email = profile.get("emailAddress", "unknown")
-            logger.info(f"✓ Gmail credentials validated: {email}")
-            return True, f"Connected as {email}"
+            logger.info("✓ Gmail API service initialized with send scope")
+            return True, "Gmail API ready to send emails"
             
         except Exception as e:
             error_msg = f"Gmail authentication failed: {e}"
@@ -194,46 +200,5 @@ class GmailAPISender:
             f.write(f"{body}\n")
         
         message_id = f"test_mode_{int(time.time())}"
-        logger.info(f"[TEST MODE] Email logged to {test_log_path}: {recipient_email}")
+        logger.info(f"[TEST MODE] Email logged: {recipient_email}")
         return True, message_id
-
-
-class EmailSenderFactory:
-    """Factory to create appropriate email sender based on config."""
-
-    @staticmethod
-    def create_sender(config: Dict[str, Any], test_mode: bool = False) -> Optional[GmailAPISender]:
-        """
-        Create email sender from config.
-        
-        Args:
-            config: Configuration dictionary with gmail settings
-            test_mode: If True, use test mode
-            
-        Returns:
-            GmailAPISender instance or None if config is invalid
-        """
-        use_api = config.get("gmail", {}).get("use_api", True)
-        
-        if not use_api:
-            logger.error("SMTP mode is deprecated. Please use Gmail API (use_api: true in config)")
-            return None
-
-        # Get credentials path - check .env first, then config, then default
-        credentials_path = os.getenv("GMAIL_API_CREDENTIALS_PATH") or config.get("gmail", {}).get("credentials_path") or "credentials.json"
-        
-        if not Path(credentials_path).exists():
-            logger.error(f"Gmail API credentials not found: {credentials_path}")
-            logger.error("Download credentials.json from Google Cloud Console and place in project root")
-            return None
-
-        resume_pdf = config.get("resume", {}).get("pdf_path", "resume/resume.pdf")
-        email_delay = config.get("gmail", {}).get("email_delay_seconds", 0.5)
-
-        return GmailAPISender(
-            credentials_path=credentials_path,
-            resume_pdf_path=resume_pdf,
-            email_delay_seconds=email_delay,
-            test_mode=test_mode
-        )
-

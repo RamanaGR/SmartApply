@@ -4,9 +4,7 @@
 
 # Gmail Configuration
 gmail:
-  use_api: true  # true = Gmail API (OAuth2), false = SMTP
-  smtp_host: smtp.gmail.com
-  smtp_port: 587
+  use_api: true
   email_delay_seconds: 0.5
   rate_limit_per_minute: 60
 
@@ -23,6 +21,7 @@ input:
   csv_filename: sample_jobs.csv  # Filename in input/ directory (e.g., jobs.csv)
   column_mapping:
     email: "Contact Info"          # CSV column name for email
+    title: "Title"                # CSV column name for job title/role
     description: "Description"     # CSV column name for job description
 
 # Email Processing
@@ -32,11 +31,12 @@ email_processing:
   test_mode: false
   skip_llm: false
   force_resend: false
+  user_confirmation_before_send: true  # Ask user Y/N before sending each email (set to false once emails are perfect)
 
 # Resume Configuration
 resume:
-  json_path: resume/Ramana_Gangarao_Resume.json
-  pdf_path: resume/Ramana_Gangarao_Resume.pdf
+  json_path: null  # auto-detect first .json file in resume/ directory
+  pdf_path: null   # auto-detect first .pdf file in resume/ directory
 
 # File Paths
 file_paths:

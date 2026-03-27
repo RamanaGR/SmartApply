@@ -4,14 +4,15 @@ Automated email generation and sending for job applications using local Ollama L
 
 ## Features
 
-- 📧 **Automated Email Generation** - Uses local Ollama LLM to generate personalized emails
-- 🤖 **LLM-Powered Personalization** - Matches candidate skills to job requirements
-- 📨 **Gmail API Integration** - Sends emails via Google OAuth2
-- 📎 **Resume Attachment** - Automatically attaches PDF resume
-- 🎯 **Batch Processing** - Process multiple job postings from CSV
-- ⚙️ **Config-Driven** - All settings in `config.yaml`, no complex CLI arguments
-- 📊 **Tracking** - Prevents duplicate emails, logs all activity
-- 🔒 **Secure** - OAuth2 authentication, minimal permissions
+- 📧 **Automated Email Generation** — Uses local Ollama LLM to generate personalized application emails
+- 🤖 **LLM-Powered Personalization** — Matches your skills to job requirements automatically
+- 📨 **Gmail API Integration** — Sends emails via Google OAuth2 (HTML formatted)
+- 📎 **Resume Attachment** — Automatically attaches your PDF resume
+- 🔗 **Social Links** — Appends LinkedIn & GitHub from your resume JSON
+- 🎯 **Batch Processing** — Process multiple job postings from CSV
+- ⚙️ **Config-Driven** — All settings in `config.yaml`, auto-detects resume files
+- 📊 **Tracking** — Prevents duplicate emails, logs all activity
+- 🔒 **Secure** — OAuth2 authentication, local LLM (data never leaves your machine)
 
 ## Quick Start
 
@@ -23,148 +24,178 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure
+### 2. Setup Resume
 
-Edit `config.yaml`:
+Copy the template and fill in your details:
+
+```bash
+cp resume/resume_template.json resume/Your_Name_Resume.json
+```
+
+Place your resume PDF in `resume/` as well. Files are auto-detected by extension — no config needed.
+
+### 3. Setup Gmail Credentials
+
+1. Create a project in [Google Cloud Console](https://console.cloud.google.com/)
+2. Enable Gmail API
+3. Create OAuth2 credentials → download `credentials.json` to project root
+4. Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+
+### 4. Configure
+
+Edit `config.yaml` — most defaults work out of the box:
+
 ```yaml
 input:
   csv_filename: your_jobs.csv
   column_mapping:
-    email: "Email Column"
-    description: "Job Description"
+    email: "Contact Info"
+    title: "Title"
+    description: "Description"
 
 resume:
-  json_path: resume/Your_Name_Resume.json
-  pdf_path: resume/Your_Name_Resume.pdf
+  json_path: null  # auto-detects first .json in resume/
+  pdf_path: null   # auto-detects first .pdf in resume/
 ```
 
-### 3. Setup Credentials
-
-Create `.env` file:
-```bash
-GMAIL_API_CREDENTIALS_PATH=credentials.json
-```
-
-Place `credentials.json` in project root (from Google Cloud Console).
-
-### 4. Run
+### 5. Run
 
 ```bash
-# Preview (dry-run)
+# Preview emails (dry-run, no sending)
 python run.py --dry-run
 
-# Send emails
+# Send emails (with confirmation prompt for each)
 python run.py
-```
 
-## Configuration
-
-See `config.yaml` for complete options:
-- `input.csv_filename` - CSV file with job postings
-- `input.column_mapping` - Map CSV columns to email/description
-- `email_processing.email_limit` - Limit number of emails (null = all)
-- `ollama` - Ollama LLM settings
-- `gmail` - Gmail API settings
-- `resume` - Resume file paths
-
-## File Structure
-
-```
-SmartApply/
-├── src/                      # Source code
-│   ├── main.py              # CLI entry point
-│   ├── config_loader.py     # Configuration
-│   ├── csv_reader.py        # CSV parsing
-│   ├── llm_client.py        # Ollama integration
-│   ├── email_sender.py      # Gmail API
-│   └── validators.py        # Pre-flight checks
-├── input/                    # CSV files
-├── resume/                   # Resume files (JSON + PDF)
-├── logs/                     # Output logs
-├── data/                     # Tracking data
-├── config.yaml              # Configuration
-├── .env                      # Credentials (git-ignored)
-├── credentials.json         # OAuth2 credentials (git-ignored)
-└── requirements.txt         # Python dependencies
-```
-
-## CSV Format
-
-```csv
-Email Column,Job Description Column
-email@example.com,"Senior Engineer position at Company..."
-another@example.com,"Software Developer role at StartupXYZ..."
+# Force resend to previously sent addresses
+python run.py --force-resend
 ```
 
 ## Resume JSON Format
 
+Use `resume/resume_template.json` as your starting point. Key structure:
+
 ```json
 {
   "cv": {
-    "name": "Your Name",
+    "name": "Your Full Name",
     "email": "your@email.com",
-    "phone": "+1-xxx-xxx-xxxx",
+    "phone": "+1 (000) 000-0000",
+    "social_networks": [
+      { "network": "LinkedIn", "username": "your-username" },
+      { "network": "GitHub", "username": "your-username" }
+    ],
     "sections": {
       "experience": [
         {
           "company": "Company",
           "position": "Role",
+          "date": { "start_date": "YYYY-MM", "end_date": null },
           "highlights": ["Achievement 1", "Achievement 2"]
         }
       ],
       "skills": [
-        { "name": "Skill", "level": "Expert" }
-      ]
+        { "label": "Programming Languages", "details": "Python, Java, SQL" },
+        { "label": "Cloud & DevOps", "details": "AWS, Docker, Kubernetes" }
+      ],
+      "education": [...],
+      "certifications": [...]
     }
   }
 }
 ```
 
+## CSV Format
+
+The CSV should have columns matching `config.yaml` → `input.column_mapping`. Example:
+
+| Contact Info | Title | Description | Company |
+|---|---|---|---|
+| `Email: john@co.com` | Data Scientist | Job posting text... | Acme Corp |
+
+## Project Structure
+
+```
+SmartApply/
+├── src/
+│   ├── main.py               # CLI entry point
+│   ├── orchestrator.py        # Pipeline orchestration
+│   ├── config_loader.py       # YAML config loading
+│   ├── validators.py          # Pre-flight validation
+│   ├── core/
+│   │   └── resume_handler.py  # Resume JSON parsing
+│   ├── services/
+│   │   ├── gmail_service.py         # Gmail API sender
+│   │   ├── ollama_service.py        # Ollama LLM client
+│   │   ├── csv_service.py           # CSV reading & tracking
+│   │   ├── email_generator_service.py  # Email generation
+│   │   ├── email_validator_service.py  # Email validation
+│   │   └── prompt_builder.py        # LLM prompt construction
+│   ├── models/                # Data models
+│   └── utils/                 # Utilities (regex, etc.)
+├── resume/                    # Your resume files (JSON + PDF)
+│   └── resume_template.json   # Template for new users
+├── input/                     # CSV files with job postings
+├── logs/                      # Output logs & result CSVs
+├── data/                      # Sent email tracking
+├── tests/                     # Test suite
+├── config.yaml                # Configuration
+├── .env.example               # Environment template
+├── requirements.txt           # Python dependencies
+└── run.py                     # Convenience runner
+```
+
+## Configuration Reference
+
+| Setting | Description | Default |
+|---|---|---|
+| `input.csv_filename` | CSV file in `input/` | required |
+| `input.column_mapping` | Map CSV columns | required |
+| `email_processing.email_limit` | Max emails (`null` = all) | `null` |
+| `email_processing.dry_run` | Preview without sending | `false` |
+| `email_processing.user_confirmation_before_send` | Ask Y/N before each send | `true` |
+| `ollama.model` | Ollama LLM model name | `llama3` |
+| `resume.json_path` | Resume JSON (`null` = auto) | `null` |
+| `resume.pdf_path` | Resume PDF (`null` = auto) | `null` |
+
 ## How It Works
 
 1. Reads job postings from CSV
-2. Extracts recipient email and description
-3. Loads your resume from JSON
-4. Sends to Ollama LLM: "Here's a candidate, here's a job. Write a compelling application email."
-5. Ollama generates personalized email matching your skills to the job
-6. Sends via Gmail API with resume PDF attached
-7. Tracks sent emails to prevent duplicates
+2. Auto-detects your resume (JSON + PDF) from `resume/`
+3. Extracts recruiter name from contact email
+4. Sends job description + resume to local Ollama LLM
+5. LLM generates personalized email matching your skills to the job
+6. Appends LinkedIn/GitHub links from resume
+7. Sends via Gmail API as HTML with resume PDF attached
+8. Tracks sent emails to prevent duplicates
 
 ## Security
 
-- **OAuth2** - No passwords stored, uses Google OAuth2
-- **Minimal Permissions** - Only `gmail.send` scope
-- **Git-Ignored** - `.env` and `credentials.json` never committed
-- **Local LLM** - Data stays local, no external AI services
+- **OAuth2** — No passwords stored, uses Google OAuth2 tokens
+- **Minimal Permissions** — Only `gmail.send` scope requested
+- **Git-Ignored** — `.env`, `credentials.json`, `token.pickle`, and personal resume files are never committed
+- **Local LLM** — All data stays on your machine via Ollama
 
 ## Troubleshooting
 
 ### Ollama Not Available
 ```bash
-ollama serve  # Start Ollama
-ollama pull llama3  # Download model
+ollama serve          # Start Ollama
+ollama pull llama3    # Download model
 ```
 
 ### Gmail Authentication Failed
-- Verify `GMAIL_API_CREDENTIALS_PATH` in `.env` points to valid credentials.json
-- First run opens browser for OAuth2 authentication
-- Clear `token.pickle` if issues persist
+- Verify `credentials.json` exists in project root
+- First run opens browser for OAuth2 consent
+- Delete `token.pickle` to re-authenticate
 
 ### No Valid Rows Found
-- Check CSV file exists in `input/` directory
-- Verify `csv_filename` in `config.yaml` is correct
-- Check `column_mapping` matches your CSV column names
-
-### CSV Not Processing
-- Ensure email addresses are valid
-- Check column names in `column_mapping` match CSV exactly
-
-## Logs
-
-- `logs/app.log` - Application logs
-- `logs/error.log` - Error logs
-- `logs/results_*.csv` - Results for each run
-- `data/sent_emails.json` - Tracking of sent emails
+- Check CSV exists in `input/` and `csv_filename` matches in config
+- Verify `column_mapping` matches your CSV column headers exactly
+- Check `data/sent_emails.json` — emails may already be tracked as sent
 
 ## License
 

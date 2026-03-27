@@ -1,0 +1,88 @@
+{
+    "cv": {
+        "name": "Your Full Name",
+        "location": "City, State",
+        "email": "your.email@example.com",
+        "phone": "+1 (000) 000-0000",
+        "social_networks": [
+            {
+                "network": "LinkedIn",
+                "username": "your-linkedin-username"
+            },
+            {
+                "network": "GitHub",
+                "username": "your-github-username"
+            }
+        ],
+        "sections": {
+            "experience": [
+                {
+                    "company": "Company Name",
+                    "position": "Job Title",
+                    "date": {
+                        "start_date": "YYYY-MM",
+                        "end_date": null
+                    },
+                    "location": "City, State",
+                    "summary": "",
+                    "highlights": [
+                        "Accomplishment or responsibility #1.",
+                        "Accomplishment or responsibility #2.",
+                        "Accomplishment or responsibility #3."
+                    ]
+                },
+                {
+                    "company": "Previous Company",
+                    "position": "Previous Job Title",
+                    "date": {
+                        "start_date": "YYYY-MM",
+                        "end_date": "YYYY-MM"
+                    },
+                    "location": "City, State",
+                    "summary": "",
+                    "highlights": [
+                        "Accomplishment or responsibility #1.",
+                        "Accomplishment or responsibility #2."
+                    ]
+                }
+            ],
+            "skills": [
+                {
+                    "label": "Programming Languages",
+                    "details": "Python, JavaScript, Java, SQL"
+                },
+                {
+                    "label": "Frameworks & Libraries",
+                    "details": "LangChain, LangGraph, React, FastAPI"
+                },
+                {
+                    "label": "Cloud & DevOps",
+                    "details": "AWS, GCP, Docker, Kubernetes"
+                }
+            ],
+            "education": [
+                {
+                    "institution": "University Name",
+                    "area": "Field of Study",
+                    "degree": "MS",
+                    "date": {
+                        "start_date": "YYYY-MM",
+                        "end_date": "YYYY-MM"
+                    },
+                    "location": "City, State, Country",
+                    "summary": ""
+                }
+            ],
+            "certifications": [
+                {
+                    "name": "Certification Name",
+                    "issued": "Mon YYYY",
+                    "expires": "Mon YYYY",
+                    "credential_id": "",
+                    "url": "https://credential-url.com",
+                    "notes": ""
+                }
+            ]
+        }
+    }
+}
