@@ -1,5 +1,5 @@
 """
-CSV Reader module for SmartApply.
+CSV reading and processing service for SmartApply.
 Handles reading CSV files, validating data, deduplicating entries, and tracking sent emails.
 """
 
@@ -13,12 +13,12 @@ from typing import List, Dict, Any, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
-class CSVReader:
+class CSVService:
     """Read and validate CSV files with email and job description data."""
 
     COMMON_EMAIL_COLUMN_VARIANTS = [
         "email", "e-mail", "email_address", "emailaddress",
-        "contact", "contact_email", "recipient", "to_address"
+        "contact", "contact_email", "recipient", "to_address", "contact info"
     ]
 
     COMMON_DESCRIPTION_COLUMN_VARIANTS = [
@@ -26,19 +26,21 @@ class CSVReader:
         "position", "job", "role", "opportunity"
     ]
 
-    def __init__(self, input_dir: str, sent_emails_db: str, column_mapping: Optional[Dict[str, str]] = None):
+    def __init__(self, input_dir: str, sent_emails_db: str, column_mapping: Optional[Dict[str, str]] = None, dry_run: bool = False):
         """
-        Initialize CSVReader.
+        Initialize CSVService.
         
         Args:
             input_dir: Directory containing CSV files
             sent_emails_db: Path to sent_emails.json tracking file
             column_mapping: Optional mapping of logical names to CSV column names
                            e.g., {"email": "Email Address", "description": "Job Description"}
+            dry_run: If True, skip duplicate checking
         """
         self.input_dir = Path(input_dir)
         self.sent_emails_db = Path(sent_emails_db)
         self.column_mapping = column_mapping or {}
+        self.dry_run = dry_run
         self.sent_emails = self._load_sent_emails()
 
     def read_csv(self, filename: str, limit: Optional[int] = None) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
@@ -69,19 +71,20 @@ class CSVReader:
                 if not reader.fieldnames:
                     raise ValueError("CSV file is empty")
 
-                # Auto-detect or validate email and description columns
-                email_col, desc_col = self._detect_columns(reader.fieldnames)
+                # Auto-detect or validate email, title and description columns
+                email_col, title_col, desc_col = self._detect_columns(reader.fieldnames)
 
                 if not email_col:
                     raise ValueError("Cannot detect email column in CSV. Check column names.")
                 if not desc_col:
-                    logger.warning("Cannot detect job description column in CSV. Proceeding without descriptions.")
+                    raise ValueError("Description column is required. Cannot detect in CSV.")
 
                 for row_idx, row in enumerate(reader, start=2):  # start=2 because row 1 is header
                     if limit and row_count >= limit:
                         break
 
                     email = row.get(email_col, "").strip()
+                    title = row.get(title_col, "").strip() if title_col else ""
                     description = row.get(desc_col, "").strip() if desc_col else ""
 
                     # Extract email if it's in "Email: xxx, Phone: yyy" format
@@ -97,8 +100,8 @@ class CSVReader:
                         })
                         continue
 
-                    # Check for duplicates (already sent or in current batch)
-                    if self._is_duplicate(email):
+                    # Check for duplicates (already sent or in current batch) - skip in dry-run mode
+                    if not self.dry_run and self._is_duplicate(email):
                         skipped_rows.append({
                             "row": row_idx,
                             "email": email,
@@ -109,6 +112,7 @@ class CSVReader:
 
                     valid_rows.append({
                         "email": email,
+                        "title": title,
                         "description": description,
                         "row_index": row_idx,
                         "raw_data": row
@@ -122,13 +126,13 @@ class CSVReader:
             logger.error(f"Error reading CSV {filename}: {e}")
             raise
 
-    def _detect_columns(self, fieldnames: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    def _detect_columns(self, fieldnames: List[str]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """
-        Auto-detect email and description columns from CSV headers.
+        Auto-detect email, title and description columns from CSV headers.
         Respects column_mapping if provided.
         
         Returns:
-            Tuple of (email_column, description_column) or (None, None) if not found
+            Tuple of (email_column, title_column, description_column) or (None, None, None) if not found
         """
         # Normalize fieldnames to lowercase for comparison
         normalized_fields = {name: name for name in fieldnames}
@@ -136,6 +140,7 @@ class CSVReader:
 
         # Check column mapping first
         email_col = None
+        title_col = None
         desc_col = None
 
         if "email" in self.column_mapping:
@@ -150,6 +155,15 @@ class CSVReader:
                 if email_col:
                     break
 
+        if "title" in self.column_mapping:
+            title_col = self.column_mapping["title"]
+        else:
+            # Auto-detect title column
+            for lower_name, original_name in lowercase_to_original.items():
+                if "title" in lower_name or "role" in lower_name or "position" in lower_name:
+                    title_col = original_name
+                    break
+
         if "description" in self.column_mapping:
             desc_col = self.column_mapping["description"]
         else:
@@ -162,8 +176,8 @@ class CSVReader:
                 if desc_col:
                     break
 
-        logger.debug(f"Detected columns - Email: {email_col}, Description: {desc_col}")
-        return email_col, desc_col
+        logger.debug(f"Detected columns - Email: {email_col}, Title: {title_col}, Description: {desc_col}")
+        return email_col, title_col, desc_col
 
     def _validate_row(self, email: str, description: str, row_idx: int) -> Optional[str]:
         """
@@ -172,16 +186,16 @@ class CSVReader:
         Returns:
             Skip reason if invalid, None if valid
         """
+        # CRITICAL: Skip if Description is empty (required for email generation)
+        if not description or not description.strip():
+            return "missing_or_empty_description"
+        
         # Validate email
         if not email:
             return "missing_email"
 
         if not self._is_valid_email(email):
             return f"invalid_email_format"
-
-        # Description can be optional, but warn if completely missing
-        if not description or len(description.strip()) < 10:
-            logger.warning(f"Row {row_idx}: Description is very short or missing. Email: {email}")
 
         return None
 

@@ -54,14 +54,24 @@ token.json
 
 # Logs & Output
 logs/
+!logs/.gitkeep
 *.log
 *.log.*
 
 # Data Files
 data/
+!data/.gitkeep
 *.db
 *.sqlite
 *.sqlite3
+
+# Resume Files (personal - never commit)
+resume/*.json
+resume/*.pdf
+!resume/resume_template.json
+
+# Backup folders
+BUP/
 
 # OS
 .DS_Store
@@ -81,14 +91,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
-dist/
-build/
 
 # Test
 .tox/
 .hypothesis/
-
-# Virtual environments
-venv/
-ENV/
-env/
