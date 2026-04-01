@@ -1,0 +1,29 @@
+# SmartApply Dependencies
+
+# CSV and data handling
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# LLM and API
+requests>=2.31.0
+httpx>=0.25.0
+
+# Configuration
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# Email
+secure-smtplib>=0.1.1
+
+# Utilities
+python-dateutil>=2.8.0
+
+# Gmail API
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.2.0
+google-api-python-client>=2.100.0
+
+# Testing (Phase 2)
+# pytest>=7.4.0
+# pytest-mock>=3.12.0
+# responses>=0.24.0
