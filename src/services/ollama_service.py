@@ -3,7 +3,7 @@
 import logging
 import time
 import requests
-from typing import Tuple
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +35,19 @@ class OllamaService:
         self.max_retries = max_retries
         self.retry_backoff_multiplier = retry_backoff_multiplier
 
-    def generate(self, prompt: str) -> Tuple[bool, str]:
+    def generate(self, prompt: str, timeout_override: Optional[int] = None) -> Tuple[bool, str]:
         """
         Generate text from prompt with retry logic.
         
         Args:
             prompt: Input prompt for the model
+            timeout_override: Optional per-call timeout (overrides self.timeout_seconds)
             
         Returns:
             Tuple of (success: bool, response: str)
         """
+        effective_timeout = timeout_override if timeout_override is not None else self.timeout_seconds
+
         for attempt in range(self.max_retries):
             try:
                 backoff_delay = (2 ** attempt) if attempt > 0 else 0
@@ -59,7 +62,7 @@ class OllamaService:
                         "prompt": prompt,
                         "stream": False,
                     },
-                    timeout=self.timeout_seconds
+                    timeout=effective_timeout
                 )
 
                 if response.status_code == 200:
@@ -78,7 +81,7 @@ class OllamaService:
                     logger.warning(f"Attempt {attempt + 1}/{self.max_retries}: {error_msg}")
 
             except requests.exceptions.Timeout:
-                error_msg = f"Ollama timeout ({self.timeout_seconds}s)"
+                error_msg = f"Ollama timeout ({effective_timeout}s)"
                 logger.warning(f"Attempt {attempt + 1}/{self.max_retries}: {error_msg}")
 
             except requests.exceptions.ConnectionError as e:
@@ -90,6 +93,7 @@ class OllamaService:
                 logger.warning(f"Attempt {attempt + 1}/{self.max_retries}: {error_msg}")
 
         return False, f"Failed after {self.max_retries} attempts"
+
 
     def _get_available_models(self) -> str:
         """Get list of available models from Ollama."""

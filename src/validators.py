@@ -196,22 +196,37 @@ class PreflightValidator:
 
     def validate_gmail_credentials(self) -> Tuple[bool, str]:
         """Check if Gmail credentials are valid."""
-        # Auto-detect credentials JSON by extension
+        # Anchor to project root (parent of src/) so paths work regardless of CWD
+        project_root = Path(__file__).resolve().parent.parent
+
+        # Precedence: 
+        # 1. Environment Variable (may have been set by orchestrator for --user)
+        # 2. Config (explicitly set via --user or config.yaml)
+        # 3. Default auto-detection in project root
         credentials_path = os.getenv("GMAIL_API_CREDENTIALS_PATH") or self.config.get("gmail", {}).get("credentials_path")
+        
         if not credentials_path:
-            json_files = list(Path(".").glob("*.json"))
+            json_files = list(project_root.glob("*.json"))
             if json_files:
                 credentials_path = str(json_files[0])
-                logger.info(f"Auto-detected credentials JSON: {credentials_path}")
+                logger.info(f"Auto-detected credentials JSON in root: {credentials_path}")
             else:
-                error = "No credentials JSON file found in project root"
+                error = "No credentials JSON file found in project root or environment"
                 logger.error(error)
                 return False, error
 
-        if not Path(credentials_path).exists():
-            error = f"Gmail API credentials not found: {credentials_path}"
+        # Resolve to absolute path for the check
+        abs_cred_path = Path(credentials_path)
+        if not abs_cred_path.is_absolute():
+             abs_cred_path = project_root / credentials_path
+
+        if not abs_cred_path.exists():
+            error = f"Gmail API credentials not found at: {abs_cred_path}"
             logger.error(error)
             return False, error
+
+        # Store resolved absolute path back into config for other services
+        self.config.setdefault("gmail", {})["credentials_path"] = str(abs_cred_path)
 
         # Auto-detect resume PDF by extension
         resume_pdf_path = self.config.get("resume", {}).get("pdf_path")

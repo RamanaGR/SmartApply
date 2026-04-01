@@ -4,6 +4,7 @@ Handles sending emails via Gmail API (OAuth2) with resume attachment and rate li
 """
 
 import logging
+import random
 import time
 import os
 import base64
@@ -24,7 +25,11 @@ class GmailAPISender:
         self,
         credentials_path: str,
         resume_pdf_path: str,
-        email_delay_seconds: float = 0.5,
+        email_delay_min_seconds: float = 30.0,
+        email_delay_max_seconds: float = 60.0,
+        cooldown_every_n_emails: int = 10,
+        cooldown_min_seconds: float = 180.0,
+        cooldown_max_seconds: float = 300.0,
         test_mode: bool = False
     ):
         """
@@ -33,16 +38,26 @@ class GmailAPISender:
         Args:
             credentials_path: Path to credentials.json from Google Cloud Console
             resume_pdf_path: Path to resume PDF to attach
-            email_delay_seconds: Delay between sending emails (rate limiting)
+            email_delay_min_seconds: Minimum randomized delay between emails
+            email_delay_max_seconds: Maximum randomized delay between emails
+            cooldown_every_n_emails: Trigger a long cooldown pause every N emails
+            cooldown_min_seconds: Minimum duration of cooldown pause in seconds
+            cooldown_max_seconds: Maximum duration of cooldown pause in seconds
             test_mode: If True, logs emails to file instead of sending
         """
         self.credentials_path = credentials_path
         self.resume_pdf_path = Path(resume_pdf_path)
-        self.email_delay_seconds = email_delay_seconds
+        self.email_delay_min_seconds = email_delay_min_seconds
+        self.email_delay_max_seconds = email_delay_max_seconds
+        self.cooldown_every_n_emails = cooldown_every_n_emails
+        self.cooldown_min_seconds = cooldown_min_seconds
+        self.cooldown_max_seconds = cooldown_max_seconds
         self.test_mode = test_mode
         self.last_send_time = 0
+        self._emails_sent_this_session = 0
         self.service = None
         self._init_service()
+
 
     def _init_service(self):
         """Initialize Gmail API service."""
@@ -55,8 +70,12 @@ class GmailAPISender:
             
             creds = None
             
+            # Store token in the same directory as credentials to ensure user-isolation
+            # e.g., resume/Ramana/token.pickle instead of project root
+            cred_path = Path(self.credentials_path).resolve()
+            token_path = cred_path.parent / "token.pickle"
+            
             # Check for saved token
-            token_path = Path("token.pickle")
             if token_path.exists():
                 with open(token_path, "rb") as token_file:
                     creds = pickle.load(token_file)
@@ -67,7 +86,7 @@ class GmailAPISender:
                     creds.refresh(Request())
                 else:
                     flow = InstalledAppFlow.from_client_secrets_file(
-                        self.credentials_path, SCOPES
+                        str(cred_path), SCOPES
                     )
                     creds = flow.run_local_server(port=0)
                 
@@ -77,7 +96,7 @@ class GmailAPISender:
             
             from googleapiclient.discovery import build
             self.service = build("gmail", "v1", credentials=creds)
-            logger.info("Gmail API service initialized successfully")
+            logger.info(f"Gmail API service initialized successfully (Token: {token_path})")
             
         except Exception as e:
             logger.error(f"Failed to initialize Gmail API service: {e}")
@@ -95,14 +114,24 @@ class GmailAPISender:
         Returns:
             Tuple of (success: bool, message_id: str or error message)
         """
-        # Enforce rate limiting
+        # Cooldown: every N emails, take a long break to avoid rate-limit detection
+        if self._emails_sent_this_session > 0 and self._emails_sent_this_session % self.cooldown_every_n_emails == 0:
+            cooldown_duration = random.uniform(self.cooldown_min_seconds, self.cooldown_max_seconds)
+            logger.info(f"🕐 Cooldown triggered after {self._emails_sent_this_session} emails. "
+                        f"Pausing for {cooldown_duration:.1f}s...")
+            time.sleep(cooldown_duration)
+
+        # Randomized jitter delay — makes send pattern look human, not robotic
         time_since_last = time.time() - self.last_send_time
-        if time_since_last < self.email_delay_seconds:
-            sleep_time = self.email_delay_seconds - time_since_last
-            logger.debug(f"Rate limiting: sleeping for {sleep_time:.2f}s")
-            time.sleep(sleep_time)
+        if self.last_send_time > 0:  # skip delay before very first email
+            jitter = random.uniform(self.email_delay_min_seconds, self.email_delay_max_seconds)
+            remaining = jitter - time_since_last
+            if remaining > 0:
+                logger.info(f"⏳ Waiting {remaining:.1f}s before next email (jitter: {jitter:.1f}s)...")
+                time.sleep(remaining)
 
         self.last_send_time = time.time()
+        self._emails_sent_this_session += 1
 
         # Test mode: log instead of send
         if self.test_mode:

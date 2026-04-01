@@ -69,6 +69,10 @@ data/
 resume/*.json
 resume/*.pdf
 !resume/resume_template.json
+resume/**/credentials.json
+resume/**/token.pickle
+resume/**/*.json
+resume/**/*.pdf
 
 # Backup folders
 BUP/
