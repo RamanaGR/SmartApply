@@ -5,7 +5,12 @@
 # Gmail Configuration
 gmail:
   use_api: true
-  email_delay_seconds: 0.5
+  credentials_path: null  # set explicit path or use --user <name>
+  email_delay_min_seconds: 0.5
+  email_delay_max_seconds: 1.5
+  cooldown_every_n_emails: 10
+  cooldown_min_seconds: 30
+  cooldown_max_seconds: 60
   rate_limit_per_minute: 60
 
 # Ollama Configuration (Local LLM)
@@ -27,6 +32,7 @@ input:
 # Email Processing
 email_processing:
   email_limit: null  # null = no limit, set to integer to limit (e.g., 10 for testing)
+  daily_cap: 100
   dry_run: false
   test_mode: false
   skip_llm: false
@@ -35,8 +41,8 @@ email_processing:
 
 # Resume Configuration
 resume:
-  json_path: null  # auto-detect first .json file in resume/ directory
-  pdf_path: null   # auto-detect first .pdf file in resume/ directory
+  json_path: null  # auto-detect or set via --user
+  pdf_path: null   # auto-detect or set via --user
 
 # File Paths
 file_paths:

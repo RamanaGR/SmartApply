@@ -4,10 +4,14 @@ Coordinates between CSV reading, LLM generation, email validation, and Gmail sen
 """
 
 import csv
+import json
 import logging
+import os
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, Future
+from datetime import datetime, date
 from pathlib import Path
-from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 # Add src to path
@@ -48,8 +52,8 @@ class SmartApplyOrchestrator:
             level=log_level,
             format=log_format or "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             handlers=[
-                logging.FileHandler(app_log),
-                logging.StreamHandler()
+                logging.FileHandler(app_log, encoding='utf-8'),
+                logging.StreamHandler(sys.stdout)
             ]
         )
 
@@ -82,13 +86,43 @@ class SmartApplyOrchestrator:
         if not self._run_preflight_checks(csv_filename):
             return 1
 
+        # Load resume (auto-detect JSON by extension if not configured)
+        resume_json_path = self.config.get("resume", {}).get("json_path")
+        if not resume_json_path:
+            resume_dir = Path("resume")
+            json_files = list(resume_dir.glob("*.json")) if resume_dir.exists() else []
+            if json_files:
+                resume_json_path = str(json_files[0])
+                self.logger.info(f"Auto-detected resume JSON: {resume_json_path}")
+            else:
+                self.logger.error("No resume JSON file found in resume/ directory")
+                return 1
+
+        try:
+            resume = ResumeHandler.load_resume(resume_json_path)
+            user_name = resume.data.name
+        except Exception as e:
+            self.logger.error(f"Failed to load resume: {e}")
+            return 1
+
+        # Ensure sanitized_user is available for log and output filenames
+        sanitized_user = "".join(c for c in user_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_').lower()
+        if not sanitized_user:
+            sanitized_user = "user"
+
+        default_db_path = Path("data/sent_emails.json")
+        configured_db = self.config.get("file_paths", {}).get("sent_emails_db", str(default_db_path))
+        
+        # Use a common database file for all users
+        db_path = Path(configured_db)
+
         # Get column mapping from config (merged with any overrides)
         column_mapping = self.config.get("input", {}).get("column_mapping", {})
 
         # Load CSV
         csv_service = CSVService(
             input_dir=self.config.get("file_paths", {}).get("input_dir", "input"),
-            sent_emails_db=self.config.get("file_paths", {}).get("sent_emails_db", "data/sent_emails.json"),
+            sent_emails_db=str(db_path),
             column_mapping=column_mapping,
             dry_run=self.dry_run
         )
@@ -116,24 +150,6 @@ class SmartApplyOrchestrator:
 
         self.logger.info(f"Processing {len(valid_rows)} valid rows")
 
-        # Load resume (auto-detect JSON by extension if not configured)
-        resume_json_path = self.config.get("resume", {}).get("json_path")
-        if not resume_json_path:
-            resume_dir = Path("resume")
-            json_files = list(resume_dir.glob("*.json")) if resume_dir.exists() else []
-            if json_files:
-                resume_json_path = str(json_files[0])
-                self.logger.info(f"Auto-detected resume JSON: {resume_json_path}")
-            else:
-                self.logger.error("No resume JSON file found in resume/ directory")
-                return 1
-
-        try:
-            resume = ResumeHandler.load_resume(resume_json_path)
-            user_name = resume.data.name
-        except Exception as e:
-            self.logger.error(f"Failed to load resume: {e}")
-            return 1
 
         # Initialize LLM service
         ollama_service = OllamaService(
@@ -172,7 +188,11 @@ class SmartApplyOrchestrator:
             email_sender = GmailAPISender(
                 credentials_path=creds_path,
                 resume_pdf_path=resume_pdf,
-                email_delay_seconds=self.config.get("email_processing", {}).get("email_delay_seconds", 0.5),
+                email_delay_min_seconds=self.config.get("gmail", {}).get("email_delay_min_seconds", 30),
+                email_delay_max_seconds=self.config.get("gmail", {}).get("email_delay_max_seconds", 60),
+                cooldown_every_n_emails=self.config.get("gmail", {}).get("cooldown_every_n_emails", 10),
+                cooldown_min_seconds=self.config.get("gmail", {}).get("cooldown_min_seconds", 180),
+                cooldown_max_seconds=self.config.get("gmail", {}).get("cooldown_max_seconds", 300),
                 test_mode=test_mode
             )
             
@@ -182,212 +202,334 @@ class SmartApplyOrchestrator:
                 return 1
 
         # Process each row
-        stats = {
+        stats: Dict[str, Any] = {
             "sent": 0,
             "failed": 0,
             "skipped": len(skipped_rows),
             "errors": []
         }
 
-        output_csv_path = self._get_output_csv_path(csv_filename)
-        csv_results = []
+        output_csv_path = self._get_output_csv_path(csv_filename, user_name)
+        csv_results: List[Dict[str, Any]] = []
 
-        for row_idx, row in enumerate(valid_rows):
-            try:
-                email = row["email"]
-                title = row.get("title", "")
-                description = row["description"]
-                # Get company from raw CSV data (the CSV has it as "Company" with capital C)
-                company = row.get("raw_data", {}).get("Company", "").strip()
-                
-                # Get contact info DIRECTLY from CSV "Contact Info" column (not from Payload)
-                contact_info = row.get("raw_data", {}).get("Contact Info", "").strip()
-                
-                # Combine title and description for LLM
-                job_context = f"{title}\n{description}".strip() if title else description
+        # --- Daily Cap Check ---
+        daily_cap = self.config.get("email_processing", {}).get("daily_cap", 100)
+        if not dry_run:
+            sent_today = self._count_sent_today()
+            remaining_cap = daily_cap - sent_today
+            if remaining_cap <= 0:
+                self.logger.warning(f"🚫 Daily cap of {daily_cap} emails reached ({sent_today} sent today). Stopping.")
+                return 0
+            if remaining_cap < len(valid_rows):
+                self.logger.warning(f"⚠️  Daily cap: {remaining_cap} emails remaining today (cap={daily_cap}, sent={sent_today}). Trimming batch.")
+                valid_rows = valid_rows[:remaining_cap]
 
-                self.logger.info(f"[{row_idx + 1}/{len(valid_rows)}] Processing {email} (Company: {company})")
+        # --- LLM Config ---
+        llm_timeout = self.config.get("ollama", {}).get("timeout_seconds", 40)
+        llm_retry_timeout = self.config.get("ollama", {}).get("retry_timeout_seconds", 12)
+        llm_minimal_timeout = self.config.get("ollama", {}).get("minimal_timeout_seconds", 8)
+        llm_quality_retries = self.config.get("ollama", {}).get("llm_quality_retries", 3)
+        skip_llm = self.config.get("email_processing", {}).get("skip_llm", False)
 
-                # Generate email
-                skip_llm = self.config.get("email_processing", {}).get("skip_llm", False)
-                email_obj = email_generator.generate(
-                    job_description=job_context,
-                    recipient_email=email,
-                    use_llm=not skip_llm,
-                    skip_llm_on_error=True,
-                    company_from_csv=company,  # Pass company from CSV
-                    contact_info=contact_info  # Pass contact info from CSV for recruiter name extraction
-                )
+        def _generate_for_row(row: Dict) -> Any:
+            """Generate email for a single row (runs in background thread for prefetch)."""
+            _email = row["email"]
+            _title = row.get("title", "")
+            _description = row["description"]
+            _company = row.get("raw_data", {}).get("Company", "").strip()
+            _contact_info = row.get("raw_data", {}).get("Contact Info", "").strip()
+            _job_context = f"{_title}\n{_description}".strip() if _title else _description
+            return email_generator.generate(
+                job_description=_job_context,
+                recipient_email=_email,
+                use_llm=not skip_llm,
+                skip_llm_on_error=True,
+                company_from_csv=_company,
+                contact_info=_contact_info,
+                job_title=_title,
+                timeout_seconds=llm_timeout,
+                retry_timeout_seconds=llm_retry_timeout,
+                minimal_timeout_seconds=llm_minimal_timeout,
+                max_quality_retries=llm_quality_retries,
+            )
 
-                # Validate email content
-                validation_result = email_validator.validate(email_obj.subject, email_obj.body)
-                
-                if validation_result.errors:
-                    self.logger.error(f"✗ Email validation failed for {email}:")
-                    for error in validation_result.errors:
-                        self.logger.error(f"  - {error}")
-                    stats["failed"] += 1
-                    csv_results.append({
-                        **row["raw_data"],
-                        "sent_status": "validation_failed",
-                        "sent_at": "",
-                        "message_id": "",
-                        "error": "; ".join(validation_result.errors)
-                    })
-                    continue
+        # --- LLM Prefetch Pipeline ---
+        # Pre-generate email #0 before the loop.
+        # The NEXT email's generation is kicked off AFTER user confirmation (Y/N),
+        # so background log messages don't pollute the input() prompt.
+        # During the Gmail send delay (30-60s), the next email generates in parallel.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            next_email_future: Future = executor.submit(_generate_for_row, valid_rows[0]) if valid_rows else None
 
-                # Log warnings
-                if validation_result.warnings:
-                    for warning in validation_result.warnings:
-                        self.logger.warning(f"⚠ {warning}")
+            for row_idx, row in enumerate(valid_rows):
+                try:
+                    email = row["email"]
+                    title = row.get("title", "")
+                    description = row["description"]
+                    # Get company from raw CSV data (the CSV has it as "Company" with capital C)
+                    company = row.get("raw_data", {}).get("Company", "").strip()
 
-                # Log preview in dry-run mode
-                if dry_run:
-                    # Print full context
-                    print("\n" + "="*80)
-                    print("DRY-RUN: EMAIL GENERATION DETAILS")
-                    print("="*80)
-                    print(f"\n📧 Recipient Email: {email}")
-                    if title:
-                        print(f"\n📋 JOB TITLE FROM CSV:")
-                        print("─"*80)
-                        print(title)
-                        print("─"*80)
-                    print(f"\n📄 JOB DESCRIPTION FROM CSV:")
-                    print("─"*80)
-                    print(description)
-                    print("─"*80)
-                    print(f"\n✉️  GENERATED EMAIL:")
-                    print("="*80)
-                    print(f"To: {email}")
-                    print(f"Subject: {email_obj.subject}")
-                    print(f"\n{'─'*80}")
-                    print("BODY:")
-                    print(f"{'─'*80}\n")
-                    print(email_obj.body)
-                    print(f"\n{'─'*80}")
-                    print("="*80 + "\n")
-                    
-                    self.logger.info(f"[DRY-RUN] Would send to {email}: {email_obj.subject}")
-                    csv_results.append({
-                        **row["raw_data"],
-                        "sent_status": "DRY-RUN",
-                        "sent_at": "",
-                        "message_id": "",
-                        "error": ""
-                    })
-                    continue
+                    # Get contact info DIRECTLY from CSV "Contact Info" column (not from Payload)
+                    contact_info = row.get("raw_data", {}).get("Contact Info", "").strip()
 
-                # Send email
-                if test_mode or (not dry_run and email_sender):
-                    # Ask for user confirmation before sending (unless dry-run)
-                    user_confirmation_enabled = self.config.get("email_processing", {}).get("user_confirmation_before_send", True)
-                    
-                    if user_confirmation_enabled:
+                    self.logger.info(f"[{row_idx + 1}/{len(valid_rows)}] Processing {email} (Company: {company})")
+
+                    # --- Prefetch: get the pre-generated email from the background thread ---
+                    self.logger.info(f"  ⏳ Waiting for LLM generation to complete...")
+                    email_obj = next_email_future.result()
+                    # NOTE: We do NOT start the next prefetch here - we wait until AFTER
+                    # the user answers Y/N to avoid log messages polluting the input() prompt.
+
+                    # Validate email content
+                    validation_result = email_validator.validate(email_obj.subject, email_obj.body)
+
+                    if validation_result.errors:
+                        self.logger.error(f"✗ Email validation failed for {email}:")
+                        for error in validation_result.errors:
+                            self.logger.error(f"  - {error}")
+                        stats["failed"] += 1
+                        csv_results.append({
+                            **row["raw_data"],
+                            "sent_status": "validation_failed",
+                            "sent_at": "",
+                            "message_id": "",
+                            "error": "; ".join(validation_result.errors)
+                        })
+                        continue
+
+                    # Log warnings
+                    if validation_result.warnings:
+                        for warning in validation_result.warnings:
+                            self.logger.warning(f"⚠ {warning}")
+
+                    # Log preview in dry-run mode
+                    if dry_run:
+                        # Print full context
                         print("\n" + "="*80)
-                        print(f"EMAIL #{row_idx + 1}/{len(valid_rows)} - CONFIRMATION REQUIRED")
+                        print("DRY-RUN: EMAIL GENERATION DETAILS")
                         print("="*80)
-                        print(f"\nTo: {email}")
+                        print(f"\n📧 Recipient Email: {email}")
+                        if title:
+                            print(f"\n📋 JOB TITLE FROM CSV:")
+                            print("─"*80)
+                            print(title)
+                            print("─"*80)
+                        print(f"\n📄 JOB DESCRIPTION FROM CSV:")
+                        print("─"*80)
+                        print(description)
+                        print("─"*80)
+                        print(f"\n✉️  GENERATED EMAIL:")
+                        print("="*80)
+                        print(f"To: {email}")
                         print(f"Subject: {email_obj.subject}")
-                        print(f"\nBody:\n{email_obj.body}")
-                        print("\n" + "="*80)
-                        
-                        while True:
-                            user_input = input(f"\nSend this email to {email}? (Y/N): ").strip().upper()
-                            if user_input in ['Y', 'N', 'YES', 'NO']:
-                                break
-                            print("Please enter Y or N")
-                        
-                        if user_input not in ['Y', 'YES']:
-                            self.logger.info(f"User skipped sending to {email}")
-                            csv_results.append({
-                                **row["raw_data"],
-                                "sent_status": "user_skipped",
-                                "sent_at": "",
-                                "message_id": "",
-                                "error": "User declined to send"
-                            })
-                            continue
+                        print(f"\n{'─'*80}")
+                        print("BODY:")
+                        print(f"{'─'*80}\n")
+                        print(email_obj.body)
+                        print(f"\n{'─'*80}")
+                        print("="*80 + "\n")
+
+                        self.logger.info(f"[DRY-RUN] Would send to {email}: {email_obj.subject}")
+                        csv_results.append({
+                            **row["raw_data"],
+                            "sent_status": "DRY-RUN",
+                            "sent_at": "",
+                            "message_id": "",
+                            "error": ""
+                        })
+                        continue
 
                     # Send email
-                    if email_sender:
-                        success, message_id = email_sender.send_email(email, email_obj.subject, email_obj.body)
+                    if test_mode or (not dry_run and email_sender):
+                        # Ask for user confirmation before sending (unless dry-run)
+                        user_confirmation_enabled = self.config.get("email_processing", {}).get("user_confirmation_before_send", True)
 
-                        if success:
-                            self.logger.info(f"✓ Email sent to {email} (ID: {message_id})")
-                            csv_service.add_sent_email(email, message_id, description)
-                            stats["sent"] += 1
+                        if user_confirmation_enabled:
+                            print("\n" + "="*80)
+                            print(f"EMAIL #{row_idx + 1}/{len(valid_rows)} - CONFIRMATION REQUIRED")
+                            print("="*80)
+                            print(f"\nTo: {email}")
+                            print(f"Subject: {email_obj.subject}")
+                            print(f"\nBody:\n{email_obj.body}")
+                            print("\n" + "="*80)
 
-                            csv_results.append({
-                                **row["raw_data"],
-                                "sent_status": "success",
-                                "sent_at": datetime.now().isoformat(),
-                                "message_id": message_id,
-                                "error": ""
-                            })
+                            # Temporarily silence the stream logger so background
+                            # threads don't pollute the input() prompt
+                            stream_handlers = [h for h in logging.root.handlers
+                                               if isinstance(h, logging.StreamHandler)
+                                               and not isinstance(h, logging.FileHandler)]
+                            for h in stream_handlers:
+                                h.setLevel(logging.CRITICAL)
+
+                            while True:
+                                user_input = input(f"\nSend this email to {email}? (Y/N): ").strip().upper()
+                                if user_input in ['Y', 'N', 'YES', 'NO']:
+                                    break
+                                print("Please enter Y or N")
+
+                            # Restore stream logger level
+                            for h in stream_handlers:
+                                h.setLevel(logging.DEBUG)
+
+                            # --- Prefetch: NOW kick off next email generation (after Y/N answered) ---
+                            # This runs during the Gmail send delay (30-60s) below.
+                            if row_idx + 1 < len(valid_rows):
+                                next_email_future = executor.submit(_generate_for_row, valid_rows[row_idx + 1])
+
+                            if user_input not in ['Y', 'YES']:
+                                self.logger.info(f"User skipped sending to {email}")
+                                csv_results.append({
+                                    **row["raw_data"],
+                                    "sent_status": "user_skipped",
+                                    "sent_at": "",
+                                    "message_id": "",
+                                    "error": "User declined to send"
+                                })
+                                continue
+
                         else:
-                            self.logger.error(f"✗ Failed to send to {email}: {message_id}")
+                            # No confirmation needed — start prefetch immediately after getting current email
+                            if row_idx + 1 < len(valid_rows):
+                                next_email_future = executor.submit(_generate_for_row, valid_rows[row_idx + 1])
+
+                        # Send email (Gmail delay + cooldown handled inside send_email)
+                        if email_sender:
+                            success, message_id = email_sender.send_email(email, email_obj.subject, email_obj.body)
+
+                            if success:
+                                self.logger.info(f"✓ Email sent to {email} (ID: {message_id})")
+                                csv_service.add_sent_email(email, message_id, description)
+                                stats["sent"] += 1
+
+                                csv_results.append({
+                                    **row["raw_data"],
+                                    "sent_status": "success",
+                                    "sent_at": datetime.now().isoformat(),
+                                    "message_id": message_id,
+                                    "error": ""
+                                })
+                            else:
+                                self.logger.error(f"✗ Failed to send to {email}: {message_id}")
+                                stats["failed"] += 1
+                                stats["errors"].append({"email": email, "reason": message_id})
+
+                                csv_results.append({
+                                    **row["raw_data"],
+                                    "sent_status": "failed",
+                                    "sent_at": "",
+                                    "message_id": "",
+                                    "error": message_id
+                                })
+                        else:
+                            error_msg = "Email sender not initialized"
+                            self.logger.error(f"✗ Cannot send to {email}: {error_msg}")
                             stats["failed"] += 1
-                            stats["errors"].append({"email": email, "reason": message_id})
 
                             csv_results.append({
                                 **row["raw_data"],
                                 "sent_status": "failed",
                                 "sent_at": "",
                                 "message_id": "",
-                                "error": message_id
+                                "error": error_msg
                             })
                     else:
-                        error_msg = "Email sender not initialized"
-                        self.logger.error(f"✗ Cannot send to {email}: {error_msg}")
-                        stats["failed"] += 1
-                        
+                        # No email sender available
+                        self.logger.info(f"[SKIPPED] {email} (no email sender in dry_run or test mode)")
                         csv_results.append({
                             **row["raw_data"],
-                            "sent_status": "failed",
+                            "sent_status": "skipped",
                             "sent_at": "",
                             "message_id": "",
-                            "error": error_msg
+                            "error": "Dry-run or test mode enabled"
                         })
-                else:
-                    # No email sender available
-                    self.logger.info(f"[SKIPPED] {email} (no email sender in dry_run or test mode)")
+
+                except Exception as e:
+                    self.logger.error(f"✗ Unexpected error processing row {row_idx + 1}: {e}")
+                    stats["failed"] += 1
+                    stats["errors"].append({"row": row_idx + 1, "reason": str(e)})
+
                     csv_results.append({
-                        **row["raw_data"],
-                        "sent_status": "skipped",
+                        **row.get("raw_data", {}),
+                        "sent_status": "failed",
                         "sent_at": "",
                         "message_id": "",
-                        "error": "Dry-run or test mode enabled"
+                        "error": str(e)
                     })
 
-            except Exception as e:
-                self.logger.error(f"✗ Unexpected error processing {email}: {e}")
-                stats["failed"] += 1
-                stats["errors"].append({"email": email, "reason": str(e)})
 
-                csv_results.append({
-                    **row["raw_data"],
-                    "sent_status": "failed",
-                    "sent_at": "",
-                    "message_id": "",
-                    "error": str(e)
-                })
 
-        # Write results to output CSV
+        # Write results to output CSV and HTML
         self._write_output_csv(output_csv_path, csv_results, valid_rows[0]["raw_data"].keys())
+        sanitized_user = "".join(c for c in user_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_').lower()
+        if not sanitized_user:
+            sanitized_user = "user"
+        self._write_output_html(output_csv_path.parent, f"{sanitized_user}_emails_applied", datetime.now().strftime("%Y%m%d_%H%M%S"), csv_results, stats)
 
         # Print summary
         self._print_summary(stats, len(valid_rows))
 
         return 0 if stats["failed"] == 0 else 1
 
+    def _count_sent_today(self) -> int:
+        """Count how many emails have been sent today from sent_emails.json."""
+        sent_db_path = Path(self.config.get("file_paths", {}).get("sent_emails_db", "data/sent_emails.json"))
+        if not sent_db_path.exists():
+            return 0
+        try:
+            with open(sent_db_path, "r") as f:
+                data = json.load(f)
+            today_str = date.today().isoformat()
+            sent_emails = data.get("sent_emails", {})
+            count = sum(
+                1 for v in sent_emails.values()
+                if isinstance(v, dict) and v.get("timestamp", "").startswith(today_str)
+            )
+            self.logger.info(f"📊 Daily cap check: {count} emails sent today")
+            return count
+        except Exception as e:
+            self.logger.warning(f"Could not read sent_emails.json for daily cap check: {e}")
+            return 0
+
     def _apply_cli_overrides(self, args):
         """Override config with CLI arguments."""
-        self.dry_run = args.dry_run
-        if args.dry_run:
+        self.dry_run = getattr(args, 'dry_run', False)
+        if self.dry_run:
+            if "email_processing" not in self.config:
+                self.config["email_processing"] = {}
             self.config["email_processing"]["dry_run"] = True
 
-        self.logger.info(f"Config loaded from: {args.config}")
+        if hasattr(args, 'user') and args.user:
+            # Anchor to project root (parent of src/) so paths work regardless of CWD
+            project_root = Path(__file__).resolve().parent.parent
+            user_dir = project_root / "resume" / args.user
+            if user_dir.exists():
+                self.logger.info(f"Running for user: {args.user} - loading files from resume\\{args.user}")
+
+                # Find credentials.json
+                cred_path = user_dir / "credentials.json"
+                if cred_path.exists():
+                    # EXPLICIT OVERRIDE: Set in config and ALSO set as env var 
+                    # so validators.py (which might check os.getenv) sees it too.
+                    abs_cred_path = str(cred_path.resolve())
+                    self.config.setdefault("gmail", {})["credentials_path"] = abs_cred_path
+                    os.environ["GMAIL_API_CREDENTIALS_PATH"] = abs_cred_path
+                else:
+                    self.logger.warning(f"credentials.json not found in {user_dir}")
+
+                # Find Resume JSON (any json that is not credentials or token)
+                json_files = [f for f in user_dir.glob("*.json") if f.name != "credentials.json" and "token" not in f.name]
+                if json_files:
+                    self.config.setdefault("resume", {})["json_path"] = str(json_files[0].resolve())
+
+                # Find Resume PDF
+                pdf_files = list(user_dir.glob("*.pdf"))
+                if pdf_files:
+                    self.config.setdefault("resume", {})["pdf_path"] = str(pdf_files[0].resolve())
+            else:
+                self.logger.warning(f"User directory resume\\{args.user} not found. Falling back to global defaults.")
+
+
+        self.logger.info(f"Config loaded from: {getattr(args, 'config', 'config.yaml')}")
 
     def _run_preflight_checks(self, csv_filename: str) -> bool:
         """Run all pre-flight validation checks."""
@@ -428,14 +570,16 @@ class SmartApplyOrchestrator:
         self.logger.info("✓ All pre-flight checks passed")
         return True
 
-    def _get_output_csv_path(self, input_filename: str) -> Path:
-        """Get output CSV path with timestamp."""
+    def _get_output_csv_path(self, input_filename: str, user_name: str) -> Path:
+        """Get output CSV path with timestamp and prefix."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = Path(self.config.get("file_paths", {}).get("output_dir", "logs"))
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        base_name = Path(input_filename).stem
-        return output_dir / f"{base_name}_results_{timestamp}.csv"
+        sanitized_user = "".join(c for c in user_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_').lower()
+        if not sanitized_user:
+            sanitized_user = "user"
+        return output_dir / f"{sanitized_user}_emails_applied_results_{timestamp}.csv"
 
     def _write_output_csv(self, output_path: Path, results: List[Dict], original_headers: List[str]):
         """Write results to output CSV with status columns."""
@@ -460,6 +604,82 @@ class SmartApplyOrchestrator:
             self.logger.info(f"Results written to {output_path}")
         except Exception as e:
             self.logger.error(f"Failed to write output CSV: {e}")
+
+    def _write_output_html(self, output_dir: Path, base_name: str, timestamp: str, results: List[Dict], stats: Dict):
+        """Write a formatted HTML report summarizing success, skips, and failures."""
+        if not results:
+            return
+
+        html_path = output_dir / f"{base_name}_report_{timestamp}.html"
+        success_rate = (stats["sent"] / len(results) * 100) if results else 0
+        
+        # Build Table rows dynamically
+        rows_html = ""
+        for r in results:
+            status = r.get("sent_status", "unknown")
+            color = "#10b981" if status == "success" else "#f59e0b" if status in ["skipped", "user_skipped"] else "#ef4444"
+            email = r.get("Contact Info", "") or r.get("contact_email", "") or "Unknown"
+            
+            rows_html += f"""
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+                <td style="padding: 12px;">{r.get('Company', 'N/A')}</td>
+                <td style="padding: 12px;">{email}</td>
+                <td style="padding: 12px;"><span style="background: {color}; color: white; padding: 4px 8px; border-radius: 9999px; font-size: 0.8em; font-weight: bold;">{status.upper()}</span></td>
+                <td style="padding: 12px; color: #6b7280; font-size: 0.9em;">{r.get('error', '')}</td>
+            </tr>"""
+
+        # Build full HTML
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>SmartApply Execution Report</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f9fafb; color: #111827; padding: 40px; margin: 0; }}
+        .container {{ max-width: 1000px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }}
+        h1 {{ color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; }}
+        .metrics {{ display: flex; gap: 20px; margin: 20px 0; }}
+        .metric-card {{ background: #f3f4f6; padding: 20px; border-radius: 8px; flex: 1; text-align: center; }}
+        .metric-card h3 {{ margin: 0; color: #6b7280; font-size: 0.9rem; text-transform: uppercase; }}
+        .metric-card p {{ margin: 10px 0 0 0; font-size: 2rem; font-weight: bold; color: #111827; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 30px; }}
+        th {{ background: #f9fafb; padding: 12px; text-align: left; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SmartApply Run Report</h1>
+        <p style="color: #6b7280;">Execution Timestamp: {timestamp}</p>
+        
+        <div class="metrics">
+            <div class="metric-card"><h3>Total Processed</h3><p>{len(results)}</p></div>
+            <div class="metric-card"><h3>Sent</h3><p style="color: #10b981;">{stats['sent']}</p></div>
+            <div class="metric-card"><h3>Skipped</h3><p style="color: #f59e0b;">{stats['skipped']}</p></div>
+            <div class="metric-card"><h3>Failed</h3><p style="color: #ef4444;">{stats['failed']}</p></div>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Company</th>
+                    <th>Email</th>
+                    <th>Status</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>"""
+
+        try:
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            self.logger.info(f"HTML Report written to {html_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to write HTML Report: {e}")
 
     def _print_summary(self, stats: Dict[str, Any], total_valid: int):
         """Print final summary."""

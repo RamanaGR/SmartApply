@@ -11,6 +11,13 @@ import argparse
 import sys
 from pathlib import Path
 
+# Force UTF-8 encoding for standard output across all platforms to avoid emoji crashes
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -39,6 +46,11 @@ Usage:
         "--dry-run",
         action="store_true",
         help="Preview without sending emails"
+    )
+
+    parser.add_argument(
+        "--user",
+        help="Run for a specific user (looks in resume/<USER>/ for credentials and resume files)"
     )
 
     return parser.parse_args()

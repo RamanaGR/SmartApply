@@ -62,6 +62,7 @@ class CSVService:
 
         valid_rows = []
         skipped_rows = []
+        seen_emails_in_batch = set()
         row_count = 0
 
         try:
@@ -85,12 +86,13 @@ class CSVService:
 
                     email = row.get(email_col, "").strip()
                     title = row.get(title_col, "").strip() if title_col else ""
+                    title = self._clean_job_title(title)
                     description = row.get(desc_col, "").strip() if desc_col else ""
 
                     # Extract email if it's in "Email: xxx, Phone: yyy" format
                     email = self._extract_email_from_contact_info(email)
 
-                    skip_reason = self._validate_row(email, description, row_idx)
+                    skip_reason = self._validate_row(email, title, description, row_idx)
                     if skip_reason:
                         skipped_rows.append({
                             "row": row_idx,
@@ -101,7 +103,7 @@ class CSVService:
                         continue
 
                     # Check for duplicates (already sent or in current batch) - skip in dry-run mode
-                    if not self.dry_run and self._is_duplicate(email):
+                    if not self.dry_run and (self._is_duplicate(email) or email in seen_emails_in_batch):
                         skipped_rows.append({
                             "row": row_idx,
                             "email": email,
@@ -109,6 +111,8 @@ class CSVService:
                             "raw_data": row
                         })
                         continue
+
+                    seen_emails_in_batch.add(email)
 
                     valid_rows.append({
                         "email": email,
@@ -179,7 +183,35 @@ class CSVService:
         logger.debug(f"Detected columns - Email: {email_col}, Title: {title_col}, Description: {desc_col}")
         return email_col, title_col, desc_col
 
-    def _validate_row(self, email: str, description: str, row_idx: int) -> Optional[str]:
+    def _clean_job_title(self, title: str) -> str:
+        """
+        Sanitize job title to remove junk values commonly scraped from posts.
+        Returns empty string if the title is purely visa/contract requirements.
+        """
+        if not title:
+            return ""
+            
+        t_lower = title.lower()
+        
+        # Explicit exact matches or substrings that signify garbage titles
+        junk_phrases = ["below mentioned", "below mentined", "highlights", "overview", "h1b only", "no gc", "is remote"]
+        if any(phrase in t_lower for phrase in junk_phrases):
+            return ""
+            
+        # Check if purely comprised of visa/contract/location terms
+        words = [w for w in t_lower.replace('/', ' ').replace('-', ' ').split() if len(w) > 1]
+        bad_terms = {
+            'c2c', 'w2', '1099', 'h1b', 'gc', 'opt', 'ead', 'remote', 
+            'onsite', 'hybrid', 'role', 'position', 'only', 'no', 'please', 
+            'is', 'below', 'mentioned'
+        }
+        
+        if words and all(w in bad_terms for w in words):
+            return ""
+            
+        return title.strip()
+
+    def _validate_row(self, email: str, title: str, description: str, row_idx: int) -> Optional[str]:
         """
         Validate a CSV row.
         
@@ -189,6 +221,11 @@ class CSVService:
         # CRITICAL: Skip if Description is empty (required for email generation)
         if not description or not description.strip():
             return "missing_or_empty_description"
+            
+        # Check for AI/ML keywords in title or description
+        combined_text = f"{title} {description}"
+        if not re.search(r'\b(AI|ML|Artificial Intelligence|Machine Learning)\b', combined_text, re.IGNORECASE):
+            return "missing_ai_ml_keywords"
         
         # Validate email
         if not email:

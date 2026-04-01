@@ -77,11 +77,15 @@ class PromptBuilder:
                             highlights = exp.get("highlights", [])
                             date_info = exp.get("date", {})
                             
+                            end_date = date_info.get("end_date")
+                            is_current = end_date is None or str(end_date).strip().lower() == "present"
+                            
                             experiences[company] = {
                                 "position": position,
                                 "highlights": highlights,
                                 "start_date": date_info.get("start_date", ""),
-                                "end_date": date_info.get("end_date")
+                                "end_date": end_date,
+                                "is_current": is_current
                             }
             
             logger.info(f"Extracted {len(experiences)} company experiences from resume")
@@ -124,17 +128,15 @@ class PromptBuilder:
         Returns:
             Complete prompt for LLM
         """
-        # Build dynamic technology mapping from actual resume (only 2 highlights per company)
+        # Build dynamic technology mapping from actual resume (1 highlight per company to save tokens)
         company_experiences = self._extract_company_experiences()
         tech_mapping = ""
         if company_experiences:
-            tech_mapping = "CANDIDATE'S ACTUAL SKILLS BY COMPANY (extracted from their real resume):\n"
+            tech_mapping = "CANDIDATE EXPERIENCE OPTIONS:\n"
             for company, details in company_experiences.items():
-                tech_mapping += f"\n{company}:\n"
-                tech_mapping += f"  Role: {details['position']}\n"
-                tech_mapping += f"  Technologies and skills used:\n"
-                for highlight in details['highlights'][:2]:  # Only 2 most relevant highlights
-                    tech_mapping += f"    {highlight}\n"
+                status = "CURRENT ROLE" if details.get("is_current") else "PAST ROLE"
+                highlight = details['highlights'][0] if details['highlights'] else ""
+                tech_mapping += f"- {company} [{status}]: {details['position']}. Key work: {highlight}\n"
         
         # Extract social network URLs
         social_networks = self._extract_social_networks()
@@ -153,95 +155,122 @@ class PromptBuilder:
         resume_str = json.dumps(self.resume_data.raw_data, indent=2) if self.resume_data.raw_data else "Resume data not available"
         greeting = f"Dear {recruiter_name}," if recruiter_name else "Dear Hiring Manager,"
 
-        prompt = f"""You are an expert recruiter writing professional job application emails.
+        prompt = f"""You are a helpful assistant assisting a real candidate in drafting a factual, professional job application email based strictly on their actual resume experience.
 
-CRITICAL RULES - NO EXCEPTIONS:
-1. ONLY use technologies EXPLICITLY stated in BOTH candidate resume AND job posting
-2. NEVER assume, hallucinate, or infer any technology not explicitly written
-3. NEVER modify candidate's experience - use exact words from resume
-4. NEVER mention resume company names (Optum, Innovapath, Wipro, etc.)
-5. ONLY mention company from job posting
-6. NEVER use vague language - all tech names must be SPECIFIC
-7. Match candidate to job based on SPECIFIC overlapping technologies
-8. NEVER extract recruiter/contact names from the job description text - ONLY use the greeting provided below
+IMPORTANT GUIDELINES:
+1. BREVITY: Keep the entire email body under 75 words. Be direct and polite.
+2. TRUTHFULNESS: Only mention skills and technologies perfectly aligned between the candidate's provided experience below and the job description. Never invent information.
+3. ACCURACY: Honestly state the candidate's company history simply based on the specific CANDIDATE EXPERIENCE OPTIONS provided.
+4. TARGET: Focus the application towards the hiring company ({company_from_email if company_from_email else 'job posting'}).
+5. GREETING: Do not extract names, strictly use the provided greeting.
 
-JOB POSTING REQUIREMENTS:
+JOB POSTING:
 {job_description}
-
-MATCHING ALGORITHM:
-- Extract specific technologies from job posting
-- Search candidate resume for exact matches
-- If exact match: Use candidate's specific experience with that technology
-- If no exact match: Find closest related technology candidate has (e.g., Java vs Python)
-- If no close match: Focus on transferable skills from strongest experience
-- ALWAYS reference most recent/current role first
-
-EMAIL REQUIREMENTS:
-- Subject: Specific job title + company name (e.g., "Application for Data Scientist at Cruisedyno")
-  Use fallback if not in posting: {company_from_email if company_from_email else 'job posting'}
-  NEVER use placeholders
-
-- Body: Maximum 120 words (paragraphs only, no lists)
-  • Para 1: Role interest + specific tech from job posting
-  • Para 2: Most recent role with actual technologies used
-  • Para 3: Express genuine interest
-  
-- Resume statement: MUST include "I have attached my resume for your reference."
-
-- Social links: WILL BE APPENDED AUTOMATICALLY by the system
-  Do NOT include them in the email body yourself
-
-- Signature: "Best regards, {self.user_name}"
-
-- Formatting: Plain text only - no bullets, dashes, asterisks, or special characters
 
 {tech_mapping}
 
-RESPONSE FORMAT - CRITICAL:
-You MUST write the email in this exact format:
+REQUIRED EMAIL FORMAT:
+You MUST output strictly in the format below:
 
 SUBJECT: Application for [Job Title] at [Company Name]
 
 BODY:
 {greeting}
 
-[Paragraph 1: Express interest in the role, mention 1-2 specific technologies from the job posting that you have experience with]
+[Para 1: Express interest in the role. Note 1 or 2 matching technologies from the job posting. (Max 2 short sentences)]
 
-[Paragraph 2: Describe your most recent/current role and the specific technologies and projects you worked on. Use exact language from your resume highlights.]
+[Para 2: Summarize a factual experience related to those technologies. 
+If the experience is from a [CURRENT ROLE] below, use: "In my current role at [EXACT COMPANY NAME]..." 
+If it is from a [PAST ROLE] below, use: "During my time at [EXACT COMPANY NAME]..." 
+(Max 2 short sentences)]
 
-[Paragraph 3: Express genuine interest in the opportunity and how your skills align with this role]
-
-I have attached my resume for your reference.
-
-Best regards,
-{self.user_name}
-
-EXAMPLE OUTPUT (do not copy, adapt for the actual job):
-SUBJECT: Application for Data Scientist at Cruisedyno
-BODY:
-{greeting}
-
-I'm excited about the Data Scientist role at Cruisedyno. With experience in Python and machine learning algorithms, I believe I can contribute effectively to your team.
-
-In my current role at Optum, I've developed skills in building intelligent systems for document understanding using Google Document AI and Neo4j to extract key information from contracts.
-
-I'm genuinely interested in this opportunity and would like to discuss how my experience can benefit your organization.
+[Para 3: Express genuine interest in the opportunity. (1 brief sentence ONLY)]
 
 I have attached my resume for your reference.
 
-Best regards,
+Regards,
 {self.user_name}
 
 FINAL CHECKLIST:
-1. Subject: job title + actual company name (no placeholders)
-2. Body: 3 plain text paragraphs only (no bullets/dashes/asterisks)
-3. Technologies: Only from BOTH resume AND job posting
-4. Resume statement: MUST include "I have attached my resume..."
-5. No resume company names: NEVER mention (Optum, Innovapath, etc.)
-6. Signature: Correct candidate name
-7. Do NOT include social links - system will append them automatically
-8. Greeting: You MUST use EXACTLY this greeting: {greeting} — do NOT change or substitute it with any name from the job description
+1. Subject: job title + actual company name (No placeholders)
+2. Body: Strictly under 75 words total for the entire body
+3. Technologies: Only use real skills mapped from the candidate experience above
+4. Signature: Correct candidate name
+5. MUST physically output the exact words "SUBJECT:" and "BODY:"!
 
-NOW WRITE THE EMAIL:"""
+NOW DRAFT THE EMAIL:"""
+
+        return prompt
+
+    def build_simple_prompt(
+        self,
+        job_description: str,
+        recruiter_name: Optional[str] = None,
+        company_from_email: Optional[str] = None
+    ) -> str:
+        """
+        Build a shorter, simpler prompt for LLM retry attempt 2.
+        Fewer instructions = less to confuse the model.
+        """
+        greeting = f"Dear {recruiter_name}," if recruiter_name else "Dear Hiring Manager,"
+        company = company_from_email or "the company"
+
+        # Get top 3 skills only
+        skills = []
+        if self.resume_data.skills:
+            skills = self.resume_data.skills[:3]
+        skills_str = ", ".join(skills) if skills else "software development"
+
+        prompt = f"""Write a short professional job application email. Keep it under 80 words.
+
+Recruiter greeting: {greeting}
+Company: {company}
+Candidate name: {self.user_name}
+Candidate top skills: {skills_str}
+
+Job posting:
+{job_description[:600]}
+
+You MUST output EXACTLY in this format:
+SUBJECT: <subject line here>
+BODY:
+{greeting}
+
+<2-3 sentence email body here>
+
+I have attached my resume for your reference.
+
+Regards,
+{self.user_name}
+
+WRITE THE EMAIL NOW:"""
+
+        return prompt
+
+    def build_minimal_prompt(
+        self,
+        job_description: str,
+        company_from_email: Optional[str] = None
+    ) -> str:
+        """
+        Build a bare-bones prompt for LLM retry attempt 3.
+        Absolute minimum — hardest to fail structurally.
+        """
+        company = company_from_email or "the company"
+        name = self.user_name
+
+        prompt = f"""Write a 3-sentence job application email from {name} to {company}.
+
+Job: {job_description[:300]}
+
+Output format (use exactly these labels):
+SUBJECT: Application from {name}
+BODY:
+Dear Hiring Manager,
+
+<3 sentences expressing interest and skills>
+
+Regards,
+{name}"""
 
         return prompt
